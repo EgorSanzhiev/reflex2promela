@@ -66,10 +66,9 @@ bool C_FILLING_TANK;
 bool C_HEATING_TANK;
 bool C_FILLING_BOTTLE;
 bool C_ON_KONVEYOR_1;
-bool C_ON_KONVEYOR_2;
 
-bool TANK_COLD;
-bool TANK_OVERHEATED;
+bool TANK_COLD = false;
+bool TANK_OVERHEATED = false;
 
 byte bottle_count = 0;
 
@@ -80,31 +79,33 @@ chan scheduler_to_proc = [0] of {mtype:Process}
 chan proc_to_scheduler = [0] of {mtype:Process}
 
 proctype Initialization() {
-	short timer = 0;
+	byte timer = 0;
 	do
 	:: 	scheduler_to_proc ? Proc_Initialization;
 	 	atomic {
 			if
 			:: (initialization_state == Initialization_Begin) -> 
-					C_FILLING_TANK = false; 
-					C_HEATING_TANK = false; 
-					C_FILLING_BOTTLE = false;
-					C_ON_KONVEYOR_1 = false;
-					C_ON_KONVEYOR_2 = false;
+					C_FILLING_TANK = OFF; 
+					C_HEATING_TANK = OFF; 
+					C_FILLING_BOTTLE = OFF;
+					C_ON_KONVEYOR_1 = OFF;
 					initialization_state = Initialization_Wait_For_Start_Button;
 					timer = 0;
-					
 			:: (initialization_state == Initialization_Wait_For_Start_Button) ->
 					if
 					:: (O_SYSTEM_START_BUTTON == ON) -> 
-							C_ON_KONVEYOR_2 = ON;
 							active_processes[TANK_FILLING_INDEX] = Proc_Tank_Filling;
+							tank_filling_state = Tank_Filling_Begin;		
 							run Tank_Filling();
 							active_processes[BOTTLE_SUPPLY_INDEX] = Proc_Bottle_Supply;
+							bottle_supply_state = Bottle_Supply_Begin;
 							run Bottle_Supply();
 							initialization_state = Initializtion_Wait_For_Stop;
 							timer = 0;
-					:: else -> skip;
+					:: else -> 
+							active_processes[INITITALIZATION_INDEX] = 0;
+							proc_to_scheduler ! Proc_Initialization;
+							break;
 					fi
 			:: (initialization_state == Initializtion_Wait_For_Stop) -> 
 					if
@@ -115,14 +116,6 @@ proctype Initialization() {
 							 bottle_supply_state = Bottle_Supply_Stop;
 							 initialization_state = Initialization_Begin;
 							 timer = 0;
-							 C_FILLING_TANK = false; 
-							 C_HEATING_TANK = false; 
-							 C_FILLING_BOTTLE = false;
-							 C_ON_KONVEYOR_1 = false;
-							 C_ON_KONVEYOR_2 = false;
-							 active_processes[INITITALIZATION_INDEX] = 0;
-							 proc_to_scheduler ! Proc_Initialization;
-							 break;
 				 	:: else -> skip;
 					fi 
 			fi
@@ -133,7 +126,7 @@ proctype Initialization() {
 }
 
 proctype Tank_Filling() {
-	short timer = 0;
+	byte timer = 0;
 	do
 	:: 	scheduler_to_proc ? Proc_Tank_Filling;
 		atomic {
@@ -143,6 +136,7 @@ proctype Tank_Filling() {
 					:: (O_TANK_EMPTY) -> tank_filling_state = Tank_Filling_Tank_Level_Control;
 					:: else -> 
 							active_processes[TANK_HEATING_INDEX] = Proc_Tank_Heating; 
+							tank_heating_state = Tank_Heating_Begin;
 							run Tank_Heating(); 
 							tank_filling_state = Tank_Filling_Tank_Level_Control; 
 					fi
@@ -162,7 +156,9 @@ proctype Tank_Filling() {
 			:: (tank_filling_state == Tank_Filling_Tank_Filling_Control) ->
 					if
 					:: (O_TANK_FULL) ->
+							tank_heating_state = Tank_Heating_Begin;
 							active_processes[TANK_HEATING_INDEX] = Proc_Tank_Heating;
+							tank_heating_state = Tank_Heating_Begin;
 							run Tank_Heating();
 							C_FILLING_TANK = OFF;
 							tank_filling_state = Tank_Filling_Tank_Level_Control;
@@ -181,7 +177,7 @@ proctype Tank_Filling() {
 }
 
 proctype Tank_Heating() {
-	short timer = 0;
+	byte timer = 0;
 	do
 	:: 	scheduler_to_proc ? Proc_Tank_Heating;
 	 	atomic {
@@ -190,6 +186,7 @@ proctype Tank_Heating() {
 					if
 					:: (TANK_COLD) -> tank_heating_state = Tank_Heating_Cooling_Control;
 					:: else ->
+							bottle_filling_state = Bottle_Filling_Begin;
 							active_processes[BOTTLE_FILLING_INDEX] = Proc_Bottle_Filling; 
 							run Bottle_Filling(); 
 							tank_heating_state = Tank_Heating_Cooling_Control;
@@ -208,6 +205,7 @@ proctype Tank_Heating() {
 			:: (tank_heating_state == Tank_Heating_Heating_Control) -> 
 					if
 					:: (TANK_OVERHEATED) ->
+							bottle_filling_state = Bottle_Filling_Begin;
 							active_processes[BOTTLE_FILLING_INDEX] = Proc_Bottle_Filling;
 							run Bottle_Filling();
 							C_HEATING_TANK = OFF;
@@ -217,7 +215,7 @@ proctype Tank_Heating() {
 					fi
 			:: (tank_heating_state == Tank_Heating_Stop) ->
 					active_processes[TANK_HEATING_INDEX] = 0;
-					proc_to_scheduler ! Proc_Tank_Heating; 
+					proc_to_scheduler ! Proc_Tank_Heating;
 					break;
 			fi
 			timer++;
@@ -228,19 +226,19 @@ proctype Tank_Heating() {
 
 
 proctype Bottle_Filling() {
-	short timer = 0;
+	byte timer = 0;
 	do
 	::	scheduler_to_proc ? Proc_Bottle_Filling;
 	 	atomic {
 			if
 			:: (bottle_filling_state == Bottle_Filling_Begin) ->
 					if
-					:: (O_BOTTLE_UNDER_NOZZLE && !O_BOTTLE_FULL) -> C_FILLING_BOTTLE = OFF;
+					:: (O_BOTTLE_UNDER_NOZZLE && !O_BOTTLE_FULL) -> C_FILLING_BOTTLE = ON;
 					:: else -> C_FILLING_BOTTLE = OFF;
 					fi
 			:: (bottle_filling_state == Bottle_Filling_Stop) ->
 					active_processes[BOTTLE_FILLING_INDEX] = 0;
-					proc_to_scheduler ! Proc_Bottle_Filling; 
+					proc_to_scheduler ! Proc_Bottle_Filling;
 					break;
 			fi
 			timer++;
@@ -250,7 +248,7 @@ proctype Bottle_Filling() {
 }
 
 proctype Bottle_Supply() {
-	short timer = 0;
+	byte timer = 0;
 	do
 	:: 	scheduler_to_proc ? Proc_Bottle_Supply;
 	 	atomic {
@@ -262,7 +260,7 @@ proctype Bottle_Supply() {
 					fi
 			:: (bottle_supply_state == Bottle_Supply_Stop) ->
 					active_processes[BOTTLE_SUPPLY_INDEX] = 0;
-					proc_to_scheduler ! Proc_Bottle_Supply; 
+					proc_to_scheduler ! Proc_Bottle_Supply;
 					break;
 			fi
 			timer++;
@@ -282,20 +280,29 @@ init {
 	run Conveyor();
 	
 	O_SYSTEM_START_BUTTON = ON;
+	
+	run Scheduler();
 }
 
-active proctype Scheduler() {
+proctype Scheduler() {
 	do
-	::	byte i;
+	::	bool have_active = false;
+ 		byte i;
 		for (i : 1..7) {
+			have_active = have_active || false;
 			mtype:Process next_proc = active_processes[i-1];
 			if 
 			:: (next_proc != 0) ->
+				have_active = true;
 				scheduler_to_proc ! next_proc;
 				proc_to_scheduler ? next_proc;
 			:: else -> skip;
 			fi
 		}
+		if
+		:: (!have_active) -> break;
+		:: else -> skip;
+		fi
 	od
 }
 
@@ -303,20 +310,40 @@ active proctype Scheduler() {
 	Imitation of the bottle filling system
 */
 proctype Tank() {
-	byte tank_level = 40;
-	short timer = 0;
+	byte tank_level = 10;
+	byte timer = 0;
+	byte temper = 100;
+	bool kill_all = false;
 	do
-	:: 	atomic {
-			scheduler_to_proc ? Imit_Tank;
-			/*if
-			:: (C_HEATING_TANK == ON) -> 
-				if
-				:: (timer % 10 == 0) -> TANK_OVERHEATED = ON; TANK_COLD = OFF; 
-				fi
-			:: else -> fsdf; 
-			fi*/
+	::  scheduler_to_proc ? Imit_Tank;
+	 	atomic {
+	 		if
+	 		:: (kill_all) -> O_SYSTEM_START_BUTTON = OFF;
+	 		:: else -> skip;
+	 		fi
+	 		if
+	 		:: (O_SYSTEM_START_BUTTON == OFF) -> active_processes[IMIT_TANK_INDEX] = 0; proc_to_scheduler ! Imit_Tank; break;
+	 		:: else -> skip;
+	 		fi
+	 		if
+	 		:: (O_BOTTLE_FULL == ON) -> bottle_count++;
+			:: else -> skip;	 		
+	 		fi
+	 		if
+			:: (bottle_count >= 5) -> kill_all = true;
+			:: else -> skip;
+			fi
+	 		if
+	 		:: (temper > 110) -> TANK_COLD = OFF; TANK_OVERHEATED = ON;
+	 		:: (temper < 100) -> TANK_COLD = ON; TANK_OVERHEATED = OFF;
+	 		:: else -> TANK_COLD = OFF; TANK_OVERHEATED = OFF;
+	 		fi
 			if
-			:: (C_FILLING_TANK == ON) -> tank_level++;
+			:: (C_HEATING_TANK == ON) -> temper = temper + 10;
+			:: else -> temper--; 
+			fi
+			if
+			:: (C_FILLING_TANK == ON) -> tank_level = tank_level + 30;
 			:: else -> skip;
 			fi
 			if
@@ -327,39 +354,45 @@ proctype Tank() {
 			if
 			:: (C_FILLING_BOTTLE == ON) ->
 				tank_level--;
+				timer++;
 				if
-				:: (timer % 5 == 0) -> O_BOTTLE_FULL = ON;  bottle_count++;
+				:: (timer % 5 == 0) -> O_BOTTLE_FULL = ON;
 				:: else -> skip;
 				fi
 			:: else -> skip;
 			fi
-			proc_to_scheduler ! Imit_Tank;
 		}
+		proc_to_scheduler ! Imit_Tank;
 	od
 } 
 
 proctype Conveyor() {
-	short timer = 0;
+	byte timer = 0;
 	do
-	:: atomic{
-			scheduler_to_proc ? Imit_Conveyor;
-			if
-			:: (bottle_count > 15) -> O_SYSTEM_START_BUTTON = OFF;
-			:: else -> skip;
-			fi
+	:: 	scheduler_to_proc ? Imit_Conveyor;
+		atomic{
 			if
 			:: (C_ON_KONVEYOR_1 == ON) -> 
 				timer++;
 				O_BOTTLE_FULL = OFF;
 				if
 				:: (timer > 5) -> O_BOTTLE_UNDER_NOZZLE = ON; timer=0;
-				:: else -> skip;
+				:: else -> O_BOTTLE_UNDER_NOZZLE = OFF;
 				fi
 			:: else -> skip;
 			fi
-			proc_to_scheduler ! Imit_Conveyor;
+			if
+	 		:: (O_SYSTEM_START_BUTTON == OFF) -> active_processes[IMIT_CONV_INDEX] = 0; proc_to_scheduler ! Imit_Conveyor; break;
+	 		:: else -> skip;
+	 		fi
 		}
+		proc_to_scheduler ! Imit_Conveyor;
 	od
 }
 
-ltl p1 {[] ((O_BOTTLE_UNDER_NOZZLE == ON) -> <> (C_FILLING_BOTTLE == ON))}
+ltl p1 {[] ((O_BOTTLE_UNDER_NOZZLE == ON && O_BOTTLE_FULL == OFF) -> <> (C_FILLING_BOTTLE == ON))}
+ltl p2 {[] ( (O_TANK_EMPTY == ON) -> <> (C_HEATING_TANK == OFF) )}
+ltl p3 {[] ( (O_TANK_EMPTY == ON) -> <> (C_FILLING_TANK == ON) )}
+ltl p4 {[] ( (O_BOTTLE_FULL == ON) -> <> (bottle_filling_state == Bottle_Filling_Begin && C_FILLING_BOTTLE == OFF) )}
+ltl p5 {[] !( (C_FILLING_BOTTLE == ON) && (O_BOTTLE_UNDER_NOZZLE == OFF) )}
+ltl p6 {[] ( (O_BOTTLE_UNDER_NOZZLE == ON) -> <> (C_ON_KONVEYOR_1 == OFF) )}
